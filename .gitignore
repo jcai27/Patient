@@ -1,0 +1,46 @@
+# Environment
+.env
+.venv
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Vector stores
+*.faiss
+*.index
+*.pkl
+chroma_db/
+
+# Persona artifacts (user data)
+/persona/*
+!/persona/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Evaluation outputs
+/eval/outputs/
+/eval/results/
+
