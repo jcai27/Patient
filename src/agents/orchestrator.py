@@ -129,7 +129,10 @@ class Orchestrator:
             "tone": style_pack.tone,
             "hedging_level": style_pack.hedging_level,
             "formality": style_pack.formality,
+            "emoji_policy": style_pack.emoji_policy,
             "target_len_tokens": style_pack.target_len_tokens,
+            "cadence_notes": style_pack.cadence_notes,
+            "follow_up_question_required": style_pack.follow_up_question_required,
         }
         
         # Step 6: Style Refiner → styled message
@@ -156,6 +159,8 @@ class Orchestrator:
                 "formality": style_pack.formality,
                 "emoji_policy": style_pack.emoji_policy,
                 "target_len_tokens": style_pack.target_len_tokens,
+                "cadence_notes": style_pack.cadence_notes,
+                "follow_up_question_required": style_pack.follow_up_question_required,
                 "signature_moves": style_pack.signature_moves,
                 "taboos": style_pack.taboos,
             }
@@ -200,6 +205,13 @@ class Orchestrator:
         trace["notes_used"] = citations if citations else [r["fact_id"] for r in reranked_results]
         
         # Update memory
+        self.memory.append_turn(
+            session_id=session_id,
+            user_id=user_id,
+            user_message=user_message,
+            assistant_response=final_response,
+        )
+
         self._update_memory(
             user_id,
             session_id,
@@ -267,4 +279,3 @@ class Orchestrator:
                 f"User mentioned: {user_message[:100]}",
                 metadata={"response": assistant_response[:100]},
             )
-

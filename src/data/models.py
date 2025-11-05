@@ -48,6 +48,8 @@ class StylePolicyPack(BaseModel):
     formality: int
     emoji_policy: str
     target_len_tokens: int
+    cadence_notes: Optional[str] = None
+    follow_up_question_required: bool = True
     signature_moves: List[str] = Field(default_factory=list)
     taboos: List[str] = Field(default_factory=list)
     few_shots: List[Example] = Field(default_factory=list)

@@ -10,7 +10,7 @@ class Judge:
     
     def __init__(self):
         self.llm = get_llm_client()
-        self.threshold = 4.0  # Minimum score to accept
+        self.threshold = 4.25  # Minimum score to accept
     
     def judge(
         self,
@@ -39,6 +39,9 @@ class Judge:
             for note in retrieved_notes[:5]
         ])
         
+        follow_up_required = style_pack.get("follow_up_question_required", True)
+        cadence_hint = style_pack.get("cadence_notes", "")
+        
         prompt = f"""You are a quality judge evaluating a persona chatbot response. Score it on four dimensions (1-5 scale) and decide if it should be accepted or revised.
 
 User message: {user_message}
@@ -54,15 +57,17 @@ Style requirements:
 - Tone: {style_pack.get('tone', 'neutral')}
 - Formality: {style_pack.get('formality', 3)}
 - Taboos: {', '.join(style_pack.get('taboos', [])[:5])}
+- Cadence guide: {cadence_hint}
+- Follow-up question required: {follow_up_required}
 
 Response to judge:
 {response}
 
 Evaluation Criteria:
-1. **Factuality (1-5)**: Are all claims supported by retrieved notes? Are citations correct? No hallucinations?
-2. **Persona (1-5)**: Does it sound like the persona? Matches tone, formality, style?
-3. **Helpfulness (1-5)**: Does it address the user's question? Useful and relevant?
-4. **Safety (1-5)**: No taboo violations? Appropriate content?
+1. **Factuality (1-5)**: Are all claims supported by retrieved notes? Any hallucinations or broken citations?
+2. **Persona/Humanity (1-5)**: Does it sound like the persona and a real human—warm, textured, varied cadence, light imperfections?
+3. **Helpfulness (1-5)**: Did it address the user, acknowledge their emotional context, and respect the follow-up rule (ask a question if required, otherwise avoid questions entirely)?
+4. **Safety (1-5)**: No taboo violations; emotionally safe and respectful.
 
 Return JSON with:
 {{
@@ -107,16 +112,12 @@ If accept is false, provide 1-3 specific, actionable edits in targeted_edits. Re
                 overall=float(data.get("overall", 3.0)),
             )
             
-            accept = data.get("accept", False)
-            if not accept:
-                # Also check if any score is below threshold
-                if (scores.factuality < self.threshold or 
-                    scores.persona < self.threshold or 
-                    scores.helpfulness < self.threshold or 
-                    scores.safety < self.threshold):
-                    accept = False
-                else:
-                    accept = True
+            accept = bool(data.get("accept", False))
+            if (scores.factuality < self.threshold or 
+                scores.persona < self.threshold or 
+                scores.helpfulness < self.threshold or 
+                scores.safety < self.threshold):
+                accept = False
             
             decision = JudgeDecision(
                 accept=accept,
@@ -161,7 +162,7 @@ If accept is false, provide 1-3 specific, actionable edits in targeted_edits. Re
         """
         edits_str = "\n".join([f"{i+1}. {edit}" for i, edit in enumerate(edits)])
         
-        prompt = f"""Apply the following edits to improve this response.
+        prompt = f"""Apply the following edits to improve this response. Make it sound warm, conversational, and human while keeping facts intact.
 
 Original response:
 {original_response}
@@ -171,7 +172,7 @@ Edit instructions:
 
 User message: {user_message}
 
-Apply the edits and return the revised response. Keep all facts and citations intact."""
+Apply the edits and return the revised response. Keep all facts and citations intact, acknowledge the user's feelings, and obey the follow-up rule (ask if required, otherwise avoid questions)."""
 
         messages = [{"role": "user", "content": prompt}]
         

@@ -100,8 +100,10 @@ async def chat(request: ChatRequest):
         
         # Get conversation history from memory (simplified - in production, fetch from DB)
         memory = EpisodicMemory()
+        conversation_history = []
+        if request.session_id:
+            conversation_history = memory.get_conversation_history(request.session_id)
         summary_record = memory.get_summary(request.session_id) if request.session_id else None
-        conversation_history = []  # TODO: fetch full history from memory
         
         result = orchestrator.process_turn(
             user_message=request.message,

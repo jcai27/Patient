@@ -238,6 +238,7 @@
             padding: 15px 20px;
             border-radius: 18px;
             word-wrap: break-word;
+            white-space: pre-wrap;
         }
 
         .message.user .message-content {
@@ -388,7 +389,7 @@
             
             <div class="persona-selector">
                 <label for="chat-persona">Select Persona:</label>
-                <select id="chat-persona" onchange="loadPersonas()">
+                <select id="chat-persona">
                     <option value="">Loading...</option>
                 </select>
             </div>
@@ -412,6 +413,9 @@
     <script>
         let currentSessionId = null;
         let selectedPersona = null;
+        const messagesDiv = document.getElementById('messages');
+        const chatPersonaSelect = document.getElementById('chat-persona');
+        const WELCOME_MESSAGE = '👋 Hello! Select a persona to start chatting. If no personas are available, upload a transcript first.';
 
         // Tab switching
         function switchTab(tabName) {
@@ -523,40 +527,85 @@
         }
 
         // Chat functionality
+        function resetChatWindow(showWelcome = true) {
+            messagesDiv.innerHTML = '';
+            if (showWelcome) {
+                addMessage(WELCOME_MESSAGE, 'assistant');
+            }
+        }
+
+        function handlePersonaChange(event) {
+            const personaName = event.target.value;
+            selectedPersona = personaName || null;
+            currentSessionId = null;
+
+            if (!selectedPersona) {
+                resetChatWindow(true);
+                return;
+            }
+
+            resetChatWindow(false);
+            addMessage(`👋 You are now chatting with ${selectedPersona}. Say hi to get started.`, 'assistant');
+
+            fetch('/admin/persona/switch', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({persona_name: selectedPersona})
+            })
+            .then(res => {
+                if (!res.ok) {
+                    throw new Error('Switch failed');
+                }
+                return res.json();
+            })
+            .catch(error => {
+                console.error('Error switching persona:', error);
+                addMessage('⚠️ Failed to switch persona. Please try again.', 'assistant');
+            });
+        }
+
         async function loadPersonas() {
             try {
                 const response = await fetch('/personas');
                 const data = await response.json();
-                
-                const select = document.getElementById('chat-persona');
-                select.innerHTML = '<option value="">Select a persona...</option>';
-                
+
+                const previousSelection = selectedPersona;
+                chatPersonaSelect.innerHTML = '<option value="">Select a persona...</option>';
+
                 if (data.personas.length === 0) {
-                    select.innerHTML = '<option value="">No personas available</option>';
+                    chatPersonaSelect.innerHTML = '<option value="">No personas available</option>';
+                    selectedPersona = null;
+                    currentSessionId = null;
+                    resetChatWindow(true);
                     return;
                 }
 
+                let personaNames = [];
                 data.personas.forEach(persona => {
                     const option = document.createElement('option');
                     option.value = persona.name;
                     option.textContent = persona.name;
-                    select.appendChild(option);
+                    chatPersonaSelect.appendChild(option);
+                    personaNames.push(persona.name);
                 });
 
-                select.onchange = function() {
-                    selectedPersona = this.value;
-                    if (selectedPersona) {
-                        // Switch persona via API
-                        fetch('/admin/persona/switch', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({persona_name: selectedPersona})
-                        });
-                    }
-                };
+                if (!chatPersonaSelect.dataset.listenerAttached) {
+                    chatPersonaSelect.addEventListener('change', handlePersonaChange);
+                    chatPersonaSelect.dataset.listenerAttached = 'true';
+                }
+
+                if (previousSelection && personaNames.includes(previousSelection)) {
+                    chatPersonaSelect.value = previousSelection;
+                    selectedPersona = previousSelection;
+                } else {
+                    selectedPersona = null;
+                    currentSessionId = null;
+                    resetChatWindow(true);
+                }
 
             } catch (error) {
                 console.error('Error loading personas:', error);
+                addMessage('⚠️ Unable to load personas. Check the server status.', 'assistant');
             }
         }
 
@@ -581,7 +630,7 @@
             input.value = '';
 
             // Show loading
-            const loadingId = addMessage('Thinking...', 'assistant');
+            const loadingId = addMessage('', 'assistant', { loading: true });
             const loadingEl = document.getElementById(loadingId);
 
             try {
@@ -607,32 +656,81 @@
                 }
 
                 // Remove loading message
-                loadingEl.remove();
-
-                // Add assistant response
-                let citationsHtml = '';
-                if (data.citations && data.citations.length > 0) {
-                    citationsHtml = `<div class="citations">📚 Sources: ${data.citations.join(', ')}</div>`;
+                if (loadingEl) {
+                    loadingEl.remove();
                 }
 
-                addMessage(data.response + citationsHtml, 'assistant', data);
+                const infoText = formatScores(data.scores);
+                addMessage(data.response, 'assistant', {
+                    citations: data.citations || [],
+                    infoText
+                });
 
             } catch (error) {
-                loadingEl.remove();
+                if (loadingEl) {
+                    loadingEl.remove();
+                }
                 addMessage('❌ Error: ' + error.message, 'assistant');
             }
         }
 
-        function addMessage(content, type, metadata = {}) {
-            const messagesDiv = document.getElementById('messages');
+        function formatScores(scores) {
+            if (!scores || typeof scores !== 'object') {
+                return '';
+            }
+            const labels = {
+                factuality: 'F',
+                persona: 'P',
+                helpfulness: 'H',
+                safety: 'S'
+            };
+            const parts = Object.keys(labels)
+                .map(key => {
+                    if (scores[key] === undefined || scores[key] === null) {
+                        return null;
+                    }
+                    const value = Number(scores[key]);
+                    if (!Number.isFinite(value)) {
+                        return null;
+                    }
+                    return `${labels[key]}: ${value.toFixed(2)}`;
+                })
+                .filter(Boolean);
+            return parts.length ? `Scores · ${parts.join(' | ')}` : '';
+        }
+
+        function addMessage(content, type, options = {}) {
             const messageDiv = document.createElement('div');
-            const messageId = 'msg-' + Date.now();
+            const messageId = 'msg-' + Date.now() + '-' + Math.random().toString(16).slice(2);
             messageDiv.id = messageId;
             messageDiv.className = `message ${type}`;
-            
-            messageDiv.innerHTML = `
-                <div class="message-content">${content}</div>
-            `;
+
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+
+            if (options.loading) {
+                messageContent.innerHTML = '<div class="loading"></div>';
+            } else if (options.html) {
+                messageContent.innerHTML = content;
+            } else {
+                messageContent.textContent = content;
+            }
+
+            if (options.citations && options.citations.length > 0) {
+                const citationsDiv = document.createElement('div');
+                citationsDiv.className = 'citations';
+                citationsDiv.textContent = `📚 Sources: ${options.citations.join(', ')}`;
+                messageContent.appendChild(citationsDiv);
+            }
+
+            messageDiv.appendChild(messageContent);
+
+            if (options.infoText) {
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'message-info';
+                infoDiv.textContent = options.infoText;
+                messageDiv.appendChild(infoDiv);
+            }
 
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -643,6 +741,9 @@
         // Load personas on page load
         window.addEventListener('DOMContentLoaded', () => {
             loadPersonas();
+            if (messagesDiv.children.length === 0) {
+                addMessage(WELCOME_MESSAGE, 'assistant');
+            }
         });
     </script>
 </body>

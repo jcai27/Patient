@@ -18,7 +18,9 @@ class Contextor:
         self.style_rules: str = ""
         self.examples: List[Example] = []
         self.taboos: List[str] = []
+        self.allow_follow_up_questions: bool = True
         self._load_artifacts()
+        self.allow_follow_up_questions = self._infer_follow_up_permission()
     
     def _load_artifacts(self):
         """Load persona artifacts."""
@@ -78,6 +80,7 @@ class Contextor:
         
         # Get length targets
         length_target = STYLE_LENGTH_TARGETS.get(intent, STYLE_LENGTH_TARGETS["default"])
+        length_target_avg = int((length_target[0] + length_target[1]) / 2)
         
         # Select few-shots (2-3 examples matching intent)
         few_shots = self._select_few_shots(intent, 2)
@@ -100,8 +103,14 @@ Persona Profile:
         
         style_rules_str = self.style_rules[:500]  # Limit length
         taboos_str = "\n".join(self.taboos[:10])  # Limit to first 10
+        follow_up_default = "true" if self.allow_follow_up_questions else "false"
+        follow_up_guidance = (
+            "This persona must not ask the clinician any questions or follow-ups."
+            if not self.allow_follow_up_questions
+            else "This persona may ask a gentle follow-up question when it feels natural."
+        )
         
-        prompt = f"""You are a style coordinator. Based on the persona profile and user's current message, generate a Style+Policy Pack.
+        prompt = f"""You are a style coordinator. Based on the persona profile and user's current message, craft a Style+Policy Pack that nudges the assistant toward sounding like a living, breathing human.
 
 {profile_str}
 
@@ -111,20 +120,31 @@ Style Rules (excerpt):
 Taboos:
 {taboos_str}
 
+Global constraint: {follow_up_guidance}
+
 User Message: {user_message}
 Detected Intent: {intent}
 Retrieved Confidence: {retrieved_confidence}
 
 Generate a JSON Style+Policy Pack with:
-- tone: string (e.g., "warm", "professional", "casual", "enthusiastic")
-- hedging_level: integer 0-5 (adjust based on retrieved_confidence: if <0.5, increase hedging)
-- formality: integer 0-5
+- tone: evocative string describing emotional posture (e.g., "wry but warm", "softly enthusiastic")
+- hedging_level: integer 0-5 (if retrieved_confidence < 0.5, set to ≥3 and bake in gentle uncertainty phrases)
+- formality: integer 0-5 (lean casual unless conversation history demands otherwise)
 - emoji_policy: "none", "light", or "rich"
-- target_len_tokens: integer (based on intent: {length_target})
-- signature_moves: array of strings (2-3 phrases/patterns from persona)
-- taboos: array of strings (relevant taboos for this query)
-- few_shots: array of 2-3 examples (user/assistant pairs from examples)
-- negative_example: optional object with user/assistant showing what NOT to do
+- target_len_tokens: integer (aim for {length_target_avg} and explicitly allow ±{length_target[1] - length_target_avg} variation)
+- cadence_notes: short paragraph on mixing sentence lengths, inserting natural pauses, and sprinkling conversational fillers
+- signature_moves: array of 3-5 persona quirks (rhetorical questions, metaphors, callbacks, small confessions)
+- taboos: array of strings (only items relevant right now, keep ≤5)
+- few_shots: array of 2-3 examples (user/assistant pairs from examples) that showcase empathy and curiosity
+- negative_example: optional object showing a robotic or disengaged answer to avoid
+- follow_up_question_required: boolean (default {follow_up_default}); set to false if the persona must not ask questions
+
+The assistant must:
+1. Acknowledge the user's emotional weather before giving advice or facts.
+2. Mirror or reference at least one detail the user previously shared if available.
+3. When follow_up_question_required is true, ask a natural follow-up question; when false, avoid asking any questions and close with reflection instead.
+4. Avoid stiff AI telltales such as "As an AI" or "Based on the data".
+5. Keep language grounded, human, and lightly imperfect (contractions, occasional fragments).
 
 Return ONLY valid JSON, no markdown or explanation."""
 
@@ -164,18 +184,23 @@ Return ONLY valid JSON, no markdown or explanation."""
                 hedging_level=data.get("hedging_level", 2),
                 formality=data.get("formality", 3),
                 emoji_policy=data.get("emoji_policy", "none"),
-                target_len_tokens=data.get("target_len_tokens", length_target[0]),
+                target_len_tokens=data.get("target_len_tokens", length_target_avg),
+                cadence_notes=data.get("cadence_notes"),
+                follow_up_question_required=data.get(
+                    "follow_up_question_required",
+                    self.allow_follow_up_questions,
+                ),
                 signature_moves=data.get("signature_moves", []),
                 taboos=data.get("taboos", self.taboos[:5]),
                 few_shots=few_shots_objs,
                 negative_example=negative_ex,
             )
-            
-            return pack
+
+            return self._apply_persona_overrides(pack, user_message)
         
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             # Fallback to default pack
-            return self._default_pack(intent, length_target)
+            return self._default_pack(intent, length_target, length_target_avg, user_message)
     
     def _classify_intent(self, message: str, history: List[Dict[str, str]]) -> str:
         """Classify user intent (simple heuristic, can be enhanced)."""
@@ -204,17 +229,79 @@ Return ONLY valid JSON, no markdown or explanation."""
         
         return []
     
-    def _default_pack(self, intent: str, length_target: tuple) -> StylePolicyPack:
+    def _infer_follow_up_permission(self) -> bool:
+        """Infer whether persona allows asking follow-up questions."""
+        corpus: List[str] = []
+        if self.style_rules:
+            corpus.append(self.style_rules.lower())
+        if self.taboos:
+            corpus.extend(taboo.lower() for taboo in self.taboos)
+        if self.profile and self.profile.backstory:
+            corpus.append(self.profile.backstory.lower())
+        
+        combined = " ".join(corpus)
+        disallow_markers = [
+            "never ask",
+            "no questions",
+            "answer-only replies",
+            "do not ask back",
+            "don't ask me questions",
+            "no follow-up questions",
+        ]
+        for marker in disallow_markers:
+            if marker in combined:
+                return False
+        return True
+    
+    def _apply_persona_overrides(self, pack: StylePolicyPack, user_message: str) -> StylePolicyPack:
+        """Clamp tuning knobs based on persona speaking style instructions."""
+        if self.profile and self.profile.speaking_style:
+            avg_len = self.profile.speaking_style.avg_sentence_len
+            if avg_len and len(avg_len) == 2:
+                _, max_words = avg_len
+                # Aim for at most ~two short sentences worth of tokens.
+                approx_tokens = max(18, int(max_words * 2 * 1.2))
+                pack.target_len_tokens = min(pack.target_len_tokens, approx_tokens)
+
+        message_word_count = max(1, len(user_message.split()))
+        proportional_word_cap = max(6, min(40, int(message_word_count * 1.2) + 4))
+        proportional_token_cap = int(proportional_word_cap * 1.3)
+        pack.target_len_tokens = min(pack.target_len_tokens, proportional_token_cap)
+
+        style_lower = self.style_rules.lower() if self.style_rules else ""
+        if "lowercase" in style_lower or "short, lowercase" in style_lower:
+            if pack.cadence_notes:
+                pack.cadence_notes += " Keep responses to one or two short, lowercase sentences with natural pauses and basic punctuation."
+            else:
+                pack.cadence_notes = "Keep responses to one or two short, lowercase sentences with natural pauses and basic punctuation."
+
+            lowercase_move = "keeps replies to one or two short lowercase sentences"
+            if lowercase_move not in pack.signature_moves:
+                pack.signature_moves = [lowercase_move] + list(pack.signature_moves)
+
+        casual_move = "sticks to chill words with no metaphors or big vocab"
+        if casual_move not in pack.signature_moves:
+            pack.signature_moves.append(casual_move)
+
+        return pack
+    
+    def _default_pack(self, intent: str, length_target: tuple, length_target_avg: int, user_message: str) -> StylePolicyPack:
         """Generate default pack if LLM parsing fails."""
-        return StylePolicyPack(
-            tone="neutral",
-            hedging_level=2,
-            formality=3,
-            emoji_policy="none",
-            target_len_tokens=length_target[0],
-            signature_moves=[],
+        default_pack = StylePolicyPack(
+            tone="warm",
+            hedging_level=3,
+            formality=2,
+            emoji_policy="light",
+            target_len_tokens=length_target_avg,
+            cadence_notes="Blend a quick empathetic acknowledgement with longer reflective sentences. Sprinkle in gentle fillers like 'honestly' or 'you know?' and avoid sounding scripted.",
+            follow_up_question_required=self.allow_follow_up_questions,
+            signature_moves=(
+                ["references earlier user details"]
+                if not self.allow_follow_up_questions
+                else ["asks a gentle follow-up question", "references earlier user details"]
+            ),
             taboos=self.taboos[:5],
             few_shots=self._select_few_shots(intent, 2),
             negative_example=None,
         )
-
+        return self._apply_persona_overrides(default_pack, user_message)

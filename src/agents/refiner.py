@@ -5,6 +5,7 @@ from src.utils.llm import get_llm_client
 from src.data.models import StylePolicyPack, PersonaProfile
 from src.config import PERSONA_DIR
 import json
+import re
 
 
 class StyleRefiner:
@@ -88,6 +89,18 @@ You ARE {persona_profile.name}. Here's who you are:
         if style_pack.taboos:
             taboos_str = f"\n\n**Things to avoid:** {', '.join(style_pack.taboos)}"
         
+        cadence_str = ""
+        if style_pack.cadence_notes:
+            cadence_str = f"\n\n**Cadence guidance:** {style_pack.cadence_notes}"
+        else:
+            cadence_str = "\n\n**Cadence guidance:** Start with a short acknowledgement, flow into a longer reflection, and close with a curious follow-up. Let one sentence breathe with a conversational filler."
+        
+        follow_up_rule = (
+            "Ask a natural follow-up question before you finish."
+            if style_pack.follow_up_question_required
+            else "Do not ask any follow-up question. Close with a reflective statement or reassurance instead."
+        )
+        
         # Get speaking style details
         style_details = ""
         if persona_profile and persona_profile.speaking_style:
@@ -114,19 +127,22 @@ Speaking Style Specifications:
 **Current Style Requirements:**
 - Tone: {style_pack.tone}
 - Target length: ~{style_pack.target_len_tokens} tokens
-{moves_str}{taboos_str}{examples_text}{few_shots_str}{negative_str}
+{moves_str}{taboos_str}{cadence_str}{examples_text}{few_shots_str}{negative_str}
 
 **CRITICAL INSTRUCTIONS:**
-1. You MUST sound EXACTLY like the persona from the transcript examples above.
-2. Match their speaking patterns, word choices, and sentence structure.
-3. Use their signature phrases naturally when appropriate.
-4. Preserve all factual details from the neutral response; do not contradict or omit key information.
-5. Speak as if this is YOUR memory, YOUR experience, YOUR thoughts.
-6. Use "I", "my", "me" - this is YOUR perspective.
-7. Match the tone, formality, and style from the examples EXACTLY.
-8. If the examples show uncertainty/hedging, use similar language.
-9. If the examples are direct/confident, be direct/confident.
-10. Keep the response fluent and personal without referencing internal processes or note IDs.
+1. Start with an empathetic acknowledgement keyed to the user's emotional context or prior detail.
+2. You MUST sound EXACTLY like the persona from the transcript examples above—contractions, slang, quirks, and all.
+3. Mix short and longer sentences; let one sentence trail with a light filler or fragment when it feels natural.
+4. Weave in signature phrases or rhetorical moves from your style pack without forcing them.
+5. Keep it to at most two short sentences (≤35 words total) and keep everything lowercase texting style (citations may stay uppercase inside brackets).
+6. Stay reactive: only address what the clinician just asked for; do not introduce new topics or extra backstory beyond the neutral draft or retrieved notes.
+7. Retell the neutral content in your own words but keep every factual point intact.
+8. Speak as if this is YOUR experience—use "I", "me", "my"—and reference prior user details when relevant.
+9. Use plain, casual words only. No figurative language, no metaphors, and avoid big or formal vocabulary.
+10. {follow_up_rule}
+11. If uncertainty is needed, hedge softly with human phrasing ("I'm leaning toward...", "It feels like...").
+12. Never mention internal tools, notes, IDs, or the fact that you are an AI.
+13. Close warmly in a way that invites the user to keep talking.
 
 **Response in YOUR voice:**"""
 
@@ -140,10 +156,64 @@ Speaking Style Specifications:
         
         response = self.llm.call(
             messages=messages,
-            temperature=0.8,  # Higher temperature for more authentic style variation
-            max_tokens=600,
+            temperature=0.9,  # Higher temperature for more authentic style variation
+            max_tokens=550,
             system=system_message,
         )
         
-        return response.strip()
+        styled_response = response.strip()
+        styled_response = self._enforce_style_rules(styled_response, user_message)
+        return styled_response
 
+    def _enforce_style_rules(self, text: str, user_message: str) -> str:
+        """Deterministically enforce lowercase, punctuation, and length guardrails."""
+        if not text:
+            return text
+
+        # Preserve citations while lowercasing everything else.
+        citations: Dict[str, str] = {}
+
+        def citation_replacer(match: re.Match) -> str:
+            token = f"__CIT_{len(citations)}__"
+            citations[token] = match.group(0)
+            return token
+
+        temp = re.sub(r'\[[A-Z]+\d+\]', citation_replacer, text)
+        temp = temp.lower()
+
+        for placeholder, citation in citations.items():
+            temp = temp.replace(placeholder, citation)
+
+        # Remove strong punctuation (keep ., ?, apostrophes, citations).
+        temp = re.sub(r'[!;:"“”’`~_^|\\/@#*$%+=<>\{\}]', '', temp)
+        temp = re.sub(r'\.{2,}', '.', temp)
+        temp = re.sub(r'\?{2,}', '?', temp)
+        temp = re.sub(r',\s*,+', ', ', temp)
+
+        # Ensure single spaces.
+        temp = re.sub(r'\s+', ' ', temp).strip()
+
+        # Limit length proportional to user prompt.
+        user_word_count = max(1, len(user_message.split()))
+        max_words = max(6, min(35, int(user_word_count * 1.2) + 4))
+
+        tokens = temp.split()
+        trimmed_tokens = []
+        content_word_count = 0
+
+        for idx, tok in enumerate(tokens):
+            trimmed_tokens.append(tok)
+            if not re.fullmatch(r'\[[A-Z]+\d+\]', tok):
+                content_word_count += len(re.findall(r"[a-z']+", tok))
+            if content_word_count >= max_words:
+                for remaining in tokens[idx + 1:]:
+                    if re.fullmatch(r'\[[A-Z]+\d+\]', remaining) and remaining not in trimmed_tokens:
+                        trimmed_tokens.append(remaining)
+                break
+
+        temp = ' '.join(trimmed_tokens).strip()
+
+        # Final cleanup: remove stray trailing punctuation beyond . or ?
+        temp = re.sub(r'[,:;]+$', '', temp).strip()
+
+        return temp
