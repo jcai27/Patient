@@ -1,5 +1,6 @@
 """Transcript ingestion: chunking, indexing, artifact generation."""
 import json
+import logging
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -9,8 +10,15 @@ from src.config import (
     CHUNK_OVERLAP_WORDS,
 )
 from src.utils.llm import get_llm_client
-from src.data.models import CanonicalFact, Example, PersonaProfile, SpeakingStyle
+from src.data.models import (
+    CanonicalFact,
+    Example,
+    PersonaProfile,
+    SpeakingStyle,
+    StressProfile,
+)
 from src.agents.storyweaver import LifeStoryAgent
+from src.agents.stress_analyzer import StressAnalyzer
 
 
 class TranscriptIngester:
@@ -19,12 +27,14 @@ class TranscriptIngester:
     def __init__(self):
         self.llm = get_llm_client()
         self.life_story_agent = LifeStoryAgent()
+        self.stress_analyzer = StressAnalyzer()
     
     def ingest(
         self,
         transcript_path: str,
         persona_name: str,
         transcript_text: Optional[str] = None,
+        audio_dir: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Ingest a transcript and generate all persona artifacts.
@@ -74,7 +84,14 @@ class TranscriptIngester:
         # Step 7: Generate taboo list (minimal, user can edit)
         taboos = self._generate_taboos(transcript)
         
-        # Step 8: Save all artifacts
+        # Step 8: Stress analyzer → stress profile
+        stress_profile = self._generate_stress_profile(
+            persona_name,
+            transcript,
+            audio_dir=Path(audio_dir) if audio_dir else None,
+        )
+
+        # Step 9: Save all artifacts
         self._save_artifacts(
             persona_dir,
             profile,
@@ -83,9 +100,10 @@ class TranscriptIngester:
             facts,
             taboos,
             persona_history,
+            stress_profile,
         )
         
-        # Step 9: Build vector index (triggered on first use of HybridRetriever)
+        # Step 10: Build vector index (triggered on first use of HybridRetriever)
         # This will happen automatically when the retriever is initialized
         
         return {
@@ -361,6 +379,23 @@ Topics and phrases to avoid or handle carefully.
 """
     
 
+    def _generate_stress_profile(
+        self,
+        persona_name: str,
+        transcript_text: str,
+        audio_dir: Optional[Path],
+    ):
+        """Generate stress profile combining transcript + optional audio."""
+        try:
+            return self.stress_analyzer.analyze(
+                persona_name=persona_name,
+                transcript_text=transcript_text,
+                audio_dir=audio_dir,
+            )
+        except Exception as exc:
+            logging.warning("Stress analysis failed for %s: %s", persona_name, exc)
+            return None
+    
     def _save_artifacts(
         self,
         persona_dir: Path,
@@ -370,6 +405,7 @@ Topics and phrases to avoid or handle carefully.
         facts: List[CanonicalFact],
         taboos: str,
         persona_history: str,
+        stress_profile: Optional[StressProfile],
     ):
         """Save all artifacts to files."""
         # Save profile (convert to dict manually)
@@ -426,3 +462,9 @@ Topics and phrases to avoid or handle carefully.
         biography_text = persona_history or self.life_story_agent.fallback_biography(profile)
         with open(persona_dir / "persona_history.md", "w", encoding="utf-8") as f:
             f.write(biography_text)
+
+        # Save stress profile
+        if stress_profile:
+            stress_file = persona_dir / "stress_profile.json"
+            with open(stress_file, "w", encoding="utf-8") as f:
+                json.dump(stress_profile.model_dump(), f, indent=2, ensure_ascii=False)

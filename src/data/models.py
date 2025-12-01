@@ -72,3 +72,26 @@ class JudgeDecision(BaseModel):
     targeted_edits: List[str] = Field(default_factory=list)
     reasoning: Optional[str] = None
 
+
+class StressHotspot(BaseModel):
+    """Stress hotspot detected from transcript or audio."""
+    source: str  # "text" or "audio"
+    quote: Optional[str] = None
+    reason: Optional[str] = None
+    markers: List[str] = Field(default_factory=list)
+    audio_file: Optional[str] = None
+    start_sec: Optional[float] = None
+    end_sec: Optional[float] = None
+    scores: Dict[str, float] = Field(default_factory=dict)
+    metrics: Dict[str, float] = Field(default_factory=dict)
+
+
+class StressProfile(BaseModel):
+    """Aggregated stress cues derived from transcript/audio."""
+    persona_name: str
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    hotspots: List[StressHotspot] = Field(default_factory=list)
+    audio_files_processed: int = 0
+    text_passages_scored: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+

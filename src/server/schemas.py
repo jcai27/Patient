@@ -26,6 +26,7 @@ class IngestTranscriptRequest(BaseModel):
     transcript_path: str
     persona_name: str
     transcript_text: Optional[str] = None  # If provided, use instead of file
+    audio_dir: Optional[str] = None  # Optional directory of wav files for stress agent
 
 
 class IngestTranscriptResponse(BaseModel):

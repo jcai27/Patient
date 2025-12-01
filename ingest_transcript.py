@@ -7,6 +7,7 @@ from src.ingest.transcript import TranscriptIngester
 def main():
     transcript_path = "transcript_cleaned.txt"
     persona_name = "VirtualHuman"
+    audio_dir = None  # e.g., Path("path/to/wavs")
     
     print(f"📖 Reading transcript from: {transcript_path}")
     transcript = Path(transcript_path).read_text(encoding="utf-8")
@@ -26,6 +27,7 @@ def main():
         result = ingester.ingest(
             transcript_path=transcript_path,
             persona_name=persona_name,
+            audio_dir=str(audio_dir) if audio_dir else None,
         )
         
         print()

@@ -3,7 +3,7 @@ import json
 from typing import Dict, Any, Optional, List
 from src.utils.llm import get_llm_client
 from src.config import PERSONA_DIR, STYLE_LENGTH_TARGETS, GLOBAL_STYLE_RULES_FILE
-from src.data.models import StylePolicyPack, Example, PersonaProfile
+from src.data.models import StylePolicyPack, Example, PersonaProfile, StressProfile
 
 
 class Contextor:
@@ -20,6 +20,7 @@ class Contextor:
         self.examples: List[Example] = []
         self.taboos: List[str] = []
         self.allow_follow_up_questions: bool = True
+        self.stress_profile: Optional[StressProfile] = None
         self._load_artifacts()
         self.allow_follow_up_questions = self._infer_follow_up_permission()
     
@@ -69,6 +70,15 @@ class Contextor:
                     for line in content.split("\n")
                     if line.strip() and (line.strip().startswith("-") or line.strip().startswith("*"))
                 ]
+
+        stress_file = self.persona_dir / "stress_profile.json"
+        if stress_file.exists():
+            try:
+                with open(stress_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.stress_profile = StressProfile(**data)
+            except Exception:
+                self.stress_profile = None
     
     def build_pack(
         self,
@@ -141,10 +151,13 @@ Persona Profile:
             history_excerpt = self.persona_history.strip()[:900]
         history_block = f"\nExtended Biography Highlights:\n{history_excerpt}\n" if history_excerpt else ""
         
+        stress_block = self._format_stress_notes()
+
         prompt = f"""You are a style coordinator. Based on the persona profile and user's current message, craft a Style+Policy Pack that nudges the assistant toward sounding like a living, breathing human.
 
 {profile_str}
 {history_block}
+{stress_block}
 
 Style Rules (excerpt):
 {style_rules_str}
@@ -230,7 +243,9 @@ Return ONLY valid JSON, no markdown or explanation."""
                 negative_example=negative_ex,
             )
 
-            return self._apply_persona_overrides(pack, user_message)
+            pack = self._apply_persona_overrides(pack, user_message)
+            pack = self._apply_stress_overrides(pack)
+            return pack
         
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # Fallback to default pack
@@ -366,4 +381,36 @@ Return ONLY valid JSON, no markdown or explanation."""
             few_shots=self._select_few_shots(intent, 2),
             negative_example=None,
         )
-        return self._apply_persona_overrides(default_pack, user_message)
+        default_pack = self._apply_persona_overrides(default_pack, user_message)
+        return self._apply_stress_overrides(default_pack)
+
+    def _format_stress_notes(self) -> str:
+        """Format stress profile summary for LLM prompt."""
+        if not self.stress_profile:
+            return ""
+        summary = self.stress_profile.summary or {}
+        lines = []
+        avg = summary.get("avg_stress_score")
+        if avg is not None:
+            lines.append(f"- Average stress score (0-4): {avg}")
+        top_markers = summary.get("top_markers") or []
+        if top_markers:
+            lines.append(f"- Frequent tension markers: {', '.join(top_markers)}")
+        hint = summary.get("narrative_hint")
+        if hint:
+            lines.append(f"- When stressed: {hint}")
+
+        if not lines:
+            return ""
+        body = "\n".join(lines[:4])
+        return f"\nStress Behavior Notes:\n{body}\n"
+
+    def _apply_stress_overrides(self, pack: StylePolicyPack) -> StylePolicyPack:
+        """Inject cadence cues derived from stress analysis."""
+        if not self.stress_profile or not self.stress_profile.summary:
+            return pack
+        hint = self.stress_profile.summary.get("narrative_hint")
+        if hint:
+            addition = f" When stress creeps in, remember: {hint}"
+            pack.cadence_notes = (pack.cadence_notes or "") + " " + addition
+        return pack

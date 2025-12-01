@@ -242,6 +242,7 @@ async def ingest_transcript(request: IngestTranscriptRequest):
             transcript_path=request.transcript_path,
             persona_name=request.persona_name,
             transcript_text=request.transcript_text,
+            audio_dir=request.audio_dir,
         )
         
         # Invalidate orchestrator cache for this persona
