@@ -42,6 +42,12 @@ STYLE_LENGTH_TARGETS = {
     "default": (100, 200),
 }
 
+# Shared style rules that apply to every persona (can be overridden by env var)
+_default_global_rules = PERSONA_DIR / "global_style_rules.md"
+GLOBAL_STYLE_RULES_FILE = Path(
+    os.getenv("GLOBAL_STYLE_RULES_FILE", str(_default_global_rules))
+)
+
 HEDGING_LEVELS = {
     0: "No hedging - state facts directly",
     1: "Minimal hedging - use 'likely', 'probably'",

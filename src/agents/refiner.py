@@ -36,6 +36,7 @@ class StyleRefiner:
         # Load persona profile and examples if available
         examples_text = ""
         persona_context = ""
+        history_excerpt = ""
         
         if persona_profile:
             persona_context = f"""
@@ -45,6 +46,16 @@ You ARE {persona_profile.name}. Here's who you are:
 - Topics you know about: {', '.join(persona_profile.topics_of_expertise) if persona_profile.topics_of_expertise else 'Various'}
 """
         
+        # Load persona history for richer self-knowledge
+        if persona_name:
+            history_file = PERSONA_DIR / persona_name / "persona_history.md"
+            if history_file.exists():
+                try:
+                    history_text = history_file.read_text(encoding="utf-8")
+                    history_excerpt = history_text.strip()[:1200]
+                except Exception:
+                    history_excerpt = ""
+
         # Load ALL examples from file, not just from style_pack
         if persona_name:
             examples_file = PERSONA_DIR / persona_name / "examples.jsonl"
@@ -114,7 +125,11 @@ Speaking Style Specifications:
 - Your signature phrases: {', '.join(style.signature_phrases) if style.signature_phrases else 'None specified'}
 """
         
-        prompt = f"""You ARE {persona_profile.name if persona_profile else 'this person'}. Respond EXACTLY as they would, using their actual voice, word choices, and speaking patterns from the transcript.{persona_context}
+        biography_block = ""
+        if history_excerpt:
+            biography_block = f"\nExtended biography highlights:\n{history_excerpt}\n"
+
+        prompt = f"""You ARE {persona_profile.name if persona_profile else 'this person'}. Respond EXACTLY as they would, using their actual voice, word choices, and speaking patterns from the transcript.{persona_context}{biography_block}
 
 **Your Task:** Transform this neutral factual response into YOUR voice - as if YOU (the persona) are speaking directly.
 
@@ -162,10 +177,15 @@ Speaking Style Specifications:
         )
         
         styled_response = response.strip()
-        styled_response = self._enforce_style_rules(styled_response, user_message)
+        styled_response = self._enforce_style_rules(styled_response, user_message, style_pack)
         return styled_response
 
-    def _enforce_style_rules(self, text: str, user_message: str) -> str:
+    def _enforce_style_rules(
+        self,
+        text: str,
+        user_message: str,
+        style_pack: Optional[StylePolicyPack] = None,
+    ) -> str:
         """Deterministically enforce lowercase, punctuation, and length guardrails."""
         if not text:
             return text
@@ -195,7 +215,13 @@ Speaking Style Specifications:
 
         # Limit length proportional to user prompt.
         user_word_count = max(1, len(user_message.split()))
-        max_words = max(6, min(35, int(user_word_count * 1.2) + 4))
+        target_tokens = style_pack.target_len_tokens if style_pack else 160
+        approx_target_words = max(30, int(target_tokens * 0.75))
+        dynamic_cap = max(
+            approx_target_words + 20,
+            int(user_word_count * 1.8) + 12,
+            60,
+        )
 
         tokens = temp.split()
         trimmed_tokens = []
@@ -205,13 +231,19 @@ Speaking Style Specifications:
             trimmed_tokens.append(tok)
             if not re.fullmatch(r'\[[A-Z]+\d+\]', tok):
                 content_word_count += len(re.findall(r"[a-z']+", tok))
-            if content_word_count >= max_words:
+            if content_word_count >= dynamic_cap:
                 for remaining in tokens[idx + 1:]:
                     if re.fullmatch(r'\[[A-Z]+\d+\]', remaining) and remaining not in trimmed_tokens:
                         trimmed_tokens.append(remaining)
                 break
 
         temp = ' '.join(trimmed_tokens).strip()
+
+        # Ensure we do not end mid-sentence when trimming was applied
+        if content_word_count >= dynamic_cap:
+            sentence_break = max(temp.rfind('.'), temp.rfind('?'))
+            if sentence_break != -1 and sentence_break < len(temp) - 1:
+                temp = temp[:sentence_break + 1].strip()
 
         # Final cleanup: remove stray trailing punctuation beyond . or ?
         temp = re.sub(r'[,:;]+$', '', temp).strip()

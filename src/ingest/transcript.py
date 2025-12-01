@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from src.config import (
     PERSONA_DIR,
     CHUNK_SIZE_WORDS,
@@ -10,7 +10,7 @@ from src.config import (
 )
 from src.utils.llm import get_llm_client
 from src.data.models import CanonicalFact, Example, PersonaProfile, SpeakingStyle
-import uuid
+from src.agents.storyweaver import LifeStoryAgent
 
 
 class TranscriptIngester:
@@ -18,6 +18,7 @@ class TranscriptIngester:
     
     def __init__(self):
         self.llm = get_llm_client()
+        self.life_story_agent = LifeStoryAgent()
     
     def ingest(
         self,
@@ -47,22 +48,33 @@ class TranscriptIngester:
         
         # Step 2: Generate canonical facts
         facts = self._extract_facts(chunks, transcript_path)
-        facts_count = len(facts)
         
         # Step 3: Generate persona profile
         profile = self._generate_profile(transcript, persona_name)
         
         # Step 4: Generate style rules
         style_rules = self._generate_style_rules(transcript, profile)
-        
-        # Step 5: Generate examples
+
+        # Step 5: Life Story Agent → extended biography and enriched facts
+        persona_history, history_facts = self._generate_persona_history(
+            transcript,
+            profile,
+            facts,
+        )
+        if history_facts:
+            facts.extend(history_facts)
+
+        # Step 6: Generate examples
         examples = self._generate_examples(chunks, profile)
         examples_count = len(examples)
-        
-        # Step 6: Generate taboo list (minimal, user can edit)
+
+        # Update facts count after enrichment
+        facts_count = len(facts)
+
+        # Step 7: Generate taboo list (minimal, user can edit)
         taboos = self._generate_taboos(transcript)
         
-        # Step 7: Save all artifacts
+        # Step 8: Save all artifacts
         self._save_artifacts(
             persona_dir,
             profile,
@@ -70,9 +82,10 @@ class TranscriptIngester:
             examples,
             facts,
             taboos,
+            persona_history,
         )
         
-        # Step 8: Build vector index (triggered on first use of HybridRetriever)
+        # Step 9: Build vector index (triggered on first use of HybridRetriever)
         # This will happen automatically when the retriever is initialized
         
         return {
@@ -255,6 +268,20 @@ Return markdown only."""
         
         return response.strip()
     
+    def _generate_persona_history(
+        self,
+        transcript: str,
+        profile: PersonaProfile,
+        existing_facts: List[CanonicalFact],
+    ) -> Tuple[str, List[CanonicalFact]]:
+        """Generate an extended persona history through the life story agent."""
+        biography, additional_facts = self.life_story_agent.generate_history(
+            transcript=transcript,
+            profile=profile,
+            existing_facts=existing_facts,
+        )
+        return biography, additional_facts
+
     def _generate_examples(self, chunks: List[Dict[str, Any]], profile: PersonaProfile) -> List[Example]:
         """Generate few-shot examples from chunks."""
         examples = []
@@ -333,6 +360,7 @@ Topics and phrases to avoid or handle carefully.
 - "Let's talk about something else instead."
 """
     
+
     def _save_artifacts(
         self,
         persona_dir: Path,
@@ -341,6 +369,7 @@ Topics and phrases to avoid or handle carefully.
         examples: List[Example],
         facts: List[CanonicalFact],
         taboos: str,
+        persona_history: str,
     ):
         """Save all artifacts to files."""
         # Save profile (convert to dict manually)
@@ -393,3 +422,7 @@ Topics and phrases to avoid or handle carefully.
         with open(persona_dir / "taboo_list.md", "w", encoding="utf-8") as f:
             f.write(taboos)
 
+        # Save extended biography
+        biography_text = persona_history or self.life_story_agent.fallback_biography(profile)
+        with open(persona_dir / "persona_history.md", "w", encoding="utf-8") as f:
+            f.write(biography_text)

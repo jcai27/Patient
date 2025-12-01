@@ -12,7 +12,7 @@ A chatbot that reliably speaks like X person and stays on-brand using small tran
 ## Architecture
 
 ### Stores
-- **Style store**: `persona_profile.json`, `style_rules.md`, `examples.jsonl`, `taboo_list.md`
+- **Style store**: Global `global_style_rules.md` + per-persona `style_rules.md`, `persona_profile.json`, `persona_history.md`, `examples.jsonl`, `taboo_list.md`
 - **Knowledge store**: `canonical_facts.jsonl` → FAISS/Chroma index
 - **Memory**: Per-user episodic notes + rolling conversation summaries
 
@@ -66,7 +66,7 @@ ANTHROPIC_API_KEY=your_key_here
      ```bash
      python src/ingest/transcript.py --persona-name "Alice" --transcript path/to/transcript.txt
      ```
-     or use the HTTP endpoint shown below. Ingestion populates `persona/<name>/` with `persona_profile.json`, `style_rules.md`, `canonical_facts.jsonl`, and embeddings.
+     or use the HTTP endpoint shown below. Ingestion populates `persona/<name>/` with persona-specific assets (`persona_profile.json`, `style_rules.md`, `persona_history.md`, `canonical_facts.jsonl`, embeddings). Global guardrails live in `persona/global_style_rules.md` and are shared across personas.
 
 5. **Verify dependencies load cleanly**
    ```bash

@@ -1,9 +1,8 @@
 """Agent 3: Contextor - builds Style+Policy Pack."""
 import json
 from typing import Dict, Any, Optional, List
-from pathlib import Path
 from src.utils.llm import get_llm_client
-from src.config import PERSONA_DIR, STYLE_LENGTH_TARGETS
+from src.config import PERSONA_DIR, STYLE_LENGTH_TARGETS, GLOBAL_STYLE_RULES_FILE
 from src.data.models import StylePolicyPack, Example, PersonaProfile
 
 
@@ -16,6 +15,8 @@ class Contextor:
         self.persona_dir = PERSONA_DIR / persona_name
         self.profile: Optional[PersonaProfile] = None
         self.style_rules: str = ""
+        self.global_style_rules: str = ""
+        self.persona_history: str = ""
         self.examples: List[Example] = []
         self.taboos: List[str] = []
         self.allow_follow_up_questions: bool = True
@@ -31,11 +32,22 @@ class Contextor:
                 data = json.load(f)
                 self.profile = PersonaProfile(**data)
         
-        # Load style rules
+        # Load global style rules (shared across personas)
+        if GLOBAL_STYLE_RULES_FILE.exists():
+            with open(GLOBAL_STYLE_RULES_FILE, "r", encoding="utf-8") as f:
+                self.global_style_rules = f.read()
+
+        # Load persona-specific style rules
         rules_file = self.persona_dir / "style_rules.md"
         if rules_file.exists():
             with open(rules_file, "r", encoding="utf-8") as f:
                 self.style_rules = f.read()
+
+        # Load persona history
+        history_file = self.persona_dir / "persona_history.md"
+        if history_file.exists():
+            with open(history_file, "r", encoding="utf-8") as f:
+                self.persona_history = f.read()
         
         # Load examples
         examples_file = self.persona_dir / "examples.jsonl"
@@ -101,7 +113,21 @@ Persona Profile:
          phrases={', '.join(self.profile.speaking_style.signature_phrases)}
 """
         
-        style_rules_str = self.style_rules[:500]  # Limit length
+        combined_rules_sections: List[str] = []
+        persona_rules_excerpt = ""
+        global_rules_excerpt = ""
+
+        if self.style_rules:
+            persona_rules_excerpt = self.style_rules.strip()
+        if self.global_style_rules:
+            global_rules_excerpt = self.global_style_rules.strip()
+
+        if persona_rules_excerpt:
+            combined_rules_sections.append(f"{self.persona_name} Style Rules:\n" + persona_rules_excerpt)
+        if global_rules_excerpt:
+            combined_rules_sections.append("Global Style Rules:\n" + global_rules_excerpt)
+
+        style_rules_str = "\n\n".join(combined_rules_sections).strip()
         taboos_str = "\n".join(self.taboos[:10])  # Limit to first 10
         follow_up_default = "true" if self.allow_follow_up_questions else "false"
         follow_up_guidance = (
@@ -109,10 +135,16 @@ Persona Profile:
             if not self.allow_follow_up_questions
             else "This persona may ask a gentle follow-up question when it feels natural."
         )
+
+        history_excerpt = ""
+        if self.persona_history:
+            history_excerpt = self.persona_history.strip()[:900]
+        history_block = f"\nExtended Biography Highlights:\n{history_excerpt}\n" if history_excerpt else ""
         
         prompt = f"""You are a style coordinator. Based on the persona profile and user's current message, craft a Style+Policy Pack that nudges the assistant toward sounding like a living, breathing human.
 
 {profile_str}
+{history_block}
 
 Style Rules (excerpt):
 {style_rules_str}
@@ -170,14 +202,16 @@ Return ONLY valid JSON, no markdown or explanation."""
             
             data = json.loads(json_str)
             
-            # Convert few_shots to Example objects
+            # Convert few_shots to Example objects, drop malformed entries quietly
             few_shots_objs = []
             for ex in data.get("few_shots", [])[:3]:
-                few_shots_objs.append(Example(**ex))
+                parsed = self._safe_example(ex)
+                if parsed:
+                    few_shots_objs.append(parsed)
             
             negative_ex = None
             if "negative_example" in data and data["negative_example"]:
-                negative_ex = Example(**data["negative_example"])
+                negative_ex = self._safe_example(data["negative_example"])
             
             pack = StylePolicyPack(
                 tone=data.get("tone", "neutral"),
@@ -198,9 +232,26 @@ Return ONLY valid JSON, no markdown or explanation."""
 
             return self._apply_persona_overrides(pack, user_message)
         
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # Fallback to default pack
             return self._default_pack(intent, length_target, length_target_avg, user_message)
+    
+    def _safe_example(self, data: Any) -> Optional[Example]:
+        """Return Example if data has required fields, else None."""
+        if not isinstance(data, dict):
+            return None
+        user_text = data.get("user")
+        assistant_text = data.get("assistant")
+        if not user_text or not assistant_text:
+            return None
+        try:
+            return Example(
+                user=str(user_text),
+                assistant=str(assistant_text),
+                intent=data.get("intent"),
+            )
+        except (TypeError, ValueError):
+            return None
     
     def _classify_intent(self, message: str, history: List[Dict[str, str]]) -> str:
         """Classify user intent (simple heuristic, can be enhanced)."""
@@ -232,8 +283,12 @@ Return ONLY valid JSON, no markdown or explanation."""
     def _infer_follow_up_permission(self) -> bool:
         """Infer whether persona allows asking follow-up questions."""
         corpus: List[str] = []
+        if self.global_style_rules:
+            corpus.append(self.global_style_rules.lower())
         if self.style_rules:
             corpus.append(self.style_rules.lower())
+        if self.persona_history:
+            corpus.append(self.persona_history.lower())
         if self.taboos:
             corpus.extend(taboo.lower() for taboo in self.taboos)
         if self.profile and self.profile.backstory:
@@ -247,6 +302,10 @@ Return ONLY valid JSON, no markdown or explanation."""
             "do not ask back",
             "don't ask me questions",
             "no follow-up questions",
+            "default to statements",
+            "statements instead of questions",
+            "only ask a question if",
+            "avoid asking questions",
         ]
         for marker in disallow_markers:
             if marker in combined:
@@ -268,7 +327,10 @@ Return ONLY valid JSON, no markdown or explanation."""
         proportional_token_cap = int(proportional_word_cap * 1.3)
         pack.target_len_tokens = min(pack.target_len_tokens, proportional_token_cap)
 
-        style_lower = self.style_rules.lower() if self.style_rules else ""
+        combined_rules_text = "\n".join(
+            section for section in [self.global_style_rules, self.style_rules] if section
+        )
+        style_lower = combined_rules_text.lower()
         if "lowercase" in style_lower or "short, lowercase" in style_lower:
             if pack.cadence_notes:
                 pack.cadence_notes += " Keep responses to one or two short, lowercase sentences with natural pauses and basic punctuation."
