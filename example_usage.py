@@ -31,6 +31,27 @@ A: Honesty above all. I value people who are direct and authentic. Small talk is
     print("Ingest response:", json.dumps(response.json(), indent=2))
 
 
+def upload_audio_example():
+    """Example: Upload an audio file for Whisper transcription."""
+    audio_path = "example_audio.mp3"
+    print(f"\nUploading audio file: {audio_path}")
+
+    try:
+        with open(audio_path, "rb") as audio_file:
+            response = requests.post(
+                f"{BASE_URL}/upload/transcript",
+                files={"file": (audio_path, audio_file, "audio/mpeg")},
+                data={"persona_name": "Alice"},
+            )
+    except FileNotFoundError:
+        print(f"Audio file not found ({audio_path}); please provide one to run this example.")
+        return
+
+    print("Audio ingest response:", json.dumps(response.json(), indent=2))
+    if response.status_code != 200:
+        print("Make sure the server can access Whisper and has an OpenAI API key.")
+
+
 def chat_example():
     """Example: Chat with the persona."""
     response = requests.post(
@@ -57,7 +78,15 @@ if __name__ == "__main__":
         print(f"Error: {e}")
         print("(Make sure the server is running)")
     
-    print("\n\nExample 2: Chat")
+    print("\nExample 2: Upload audio for ingestion")
+    print("-" * 50)
+    try:
+        upload_audio_example()
+    except Exception as e:
+        print(f"Error: {e}")
+        print("(Make sure the server is running and Whisper is available)")
+    
+    print("\n\nExample 3: Chat")
     print("-" * 50)
     try:
         chat_example()

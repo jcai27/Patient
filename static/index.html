@@ -346,17 +346,17 @@
 
         <!-- Upload Tab -->
         <div id="upload-tab" class="tab-content active">
-            <h2>Upload & Ingest Transcript</h2>
+            <h2>Upload & Ingest Transcript or Audio</h2>
             <p style="color: #666; margin-bottom: 30px;">
-                Upload a transcript file to create a persona. The system will extract facts, generate a profile, and build the knowledge base.
+                Upload a cleaned transcript or interview audio to create a persona. The system will transcribe audio if needed, extract facts, generate a profile, and build the knowledge base.
             </p>
 
             <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
                 <div class="upload-icon">📄</div>
-                <div class="upload-text">Click or drag & drop your transcript file here</div>
-                <div style="color: #999; font-size: 0.9em;">Supports .txt files</div>
+                <div class="upload-text">Click or drag & drop your transcript or MP3/WAV audio here</div>
+                <div style="color: #999; font-size: 0.9em;">Supports .txt transcripts or audio interviews</div>
             </div>
-            <input type="file" id="file-input" class="file-input" accept=".txt" />
+            <input type="file" id="file-input" class="file-input" accept=".txt,.mp3,.wav,.m4a,.flac,.aac" />
 
             <div class="input-group" style="margin-top: 30px;">
                 <label for="persona-name">Persona Name</label>

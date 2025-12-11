@@ -1,5 +1,6 @@
 """FastAPI server for persona chatbot."""
 import json
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -21,12 +22,14 @@ from src.agents.orchestrator import Orchestrator
 from src.ingest.transcript import TranscriptIngester
 from src.config import PERSONA_DIR
 from src.memory.episodic import EpisodicMemory
+from src.utils.transcription import transcribe_audio_file
 
 # Global state (in production, use proper state management)
 _current_persona: Optional[str] = None
 _orchestrators: Dict[str, Orchestrator] = {}
 _traces: Dict[str, Dict[str, Any]] = {}  # trace_id -> trace data
 _ingestion_status: Dict[str, Dict[str, Any]] = {}  # persona_name -> status
+SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".aac"}
 
 app = FastAPI(
     title="Persona Chatbot API",
@@ -135,25 +138,46 @@ async def upload_transcript(
     file: UploadFile = File(...),
     persona_name: str = Form(...),
 ):
-    """Upload and ingest a transcript file."""
+    """Upload an audio or transcript file and kick off ingestion."""
     global _ingestion_status
     
     try:
-        # Validate file type
-        if not file.filename.endswith('.txt'):
-            raise HTTPException(status_code=400, detail="Only .txt files are supported")
-        
-        # Read file content
+        file_name = Path(file.filename)
+        suffix = file_name.suffix.lower()
         content = await file.read()
-        transcript_text = content.decode('utf-8')
         
-        # Update status
-        _ingestion_status[persona_name] = {
-            "status": "processing",
-            "progress": "Starting ingestion...",
-            "persona_name": persona_name,
-        }
-        
+        # Determine transcript text (direct or via Whisper)
+        if suffix in SUPPORTED_AUDIO_EXTENSIONS:
+            _ingestion_status[persona_name] = {
+                "status": "processing",
+                "progress": "Transcribing audio input...",
+                "persona_name": persona_name,
+            }
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                tmp_file.write(content)
+            temp_path = Path(tmp_file.name)
+
+            try:
+                transcript_text = transcribe_audio_file(temp_path)
+            finally:
+                temp_path.unlink(missing_ok=True)
+
+            _ingestion_status[persona_name]["progress"] = "Starting ingestion..."
+
+        elif suffix == ".txt":
+            transcript_text = content.decode("utf-8")
+            _ingestion_status[persona_name] = {
+                "status": "processing",
+                "progress": "Starting ingestion...",
+                "persona_name": persona_name,
+            }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Only .txt transcripts or supported audio files (mp3/wav/m4a) are accepted.",
+            )
+
         # Ingest transcript
         ingester = TranscriptIngester()
         result = ingester.ingest(
@@ -161,12 +185,12 @@ async def upload_transcript(
             persona_name=persona_name,
             transcript_text=transcript_text,
         )
-        
+
         # Invalidate orchestrator cache for this persona
         global _orchestrators
         if persona_name in _orchestrators:
             del _orchestrators[persona_name]
-        
+
         # Update status
         _ingestion_status[persona_name] = {
             "status": "complete",
@@ -176,7 +200,7 @@ async def upload_transcript(
             "examples_count": result["examples_count"],
             "chunks_count": result.get("chunks_count", 0),
         }
-        
+
         return {
             "status": "success",
             "persona_name": result["persona_name"],
@@ -188,16 +212,15 @@ async def upload_transcript(
         import traceback
         error_details = traceback.format_exc()
         print(f"Upload error: {error_details}")  # Log to server console
-        
+
         _ingestion_status[persona_name] = {
             "status": "error",
             "progress": f"Error: {str(e)}",
             "persona_name": persona_name,
         }
-        # Return more detailed error for debugging
         raise HTTPException(
-            status_code=500, 
-            detail=f"Upload failed: {str(e)}\n\nFull error:\n{error_details}"
+            status_code=500,
+            detail=f"Upload failed: {str(e)}\n\nFull error:\n{error_details}",
         )
 
 

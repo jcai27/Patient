@@ -247,6 +247,11 @@ Return JSON only."""
                 speaking_style=SpeakingStyle(),
             )
     
+    CLARIFYING_RULE_TEXT = (
+        "\n\n**Clarifying questions only:**",
+        "Avoid asking the user any question back unless you are clarifying something they already said.",
+    )
+
     def _generate_style_rules(self, transcript: str, profile: PersonaProfile) -> str:
         """Generate style rules markdown."""
         # Convert profile to dict manually
@@ -283,8 +288,11 @@ Return markdown only."""
             temperature=0.4,
             max_tokens=500,
         )
-        
-        return response.strip()
+        rules = response.strip()
+        clarifying_text = " ".join(self.CLARIFYING_RULE_TEXT)
+        if clarifying_text not in rules:
+            rules = f"{rules}\n\n{clarifying_text}"
+        return rules
     
     def _generate_persona_history(
         self,

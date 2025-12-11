@@ -39,6 +39,14 @@ curl -X POST http://localhost:8000/ingest/transcript \
   }'
 ```
 
+Need to ingest raw audio? Upload an `.mp3`/`.wav` interview and let Whisper do the transcription for you:
+
+```bash
+curl -X POST http://localhost:8000/upload/transcript \
+  -F "persona_name=Alice" \
+  -F "file=@interview.mp3"
+```
+
 Or with inline text:
 
 ```bash

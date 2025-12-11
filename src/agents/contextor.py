@@ -139,12 +139,16 @@ Persona Profile:
 
         style_rules_str = "\n\n".join(combined_rules_sections).strip()
         taboos_str = "\n".join(self.taboos[:10])  # Limit to first 10
-        follow_up_default = "true" if self.allow_follow_up_questions else "false"
-        follow_up_guidance = (
-            "This persona must not ask the clinician any questions or follow-ups."
-            if not self.allow_follow_up_questions
-            else "This persona may ask a gentle follow-up question when it feels natural."
-        )
+        if self.allow_follow_up_questions:
+            follow_up_guidance = (
+                "This persona may ask gentle follow-up questions only to clarify details the user already provided."
+            )
+            follow_up_default = "true"
+        else:
+            follow_up_guidance = (
+                "This persona must avoid asking questions except when clarifying something the user already said."
+            )
+            follow_up_default = "false"
 
         history_excerpt = ""
         if self.persona_history:
@@ -186,10 +190,11 @@ Generate a JSON Style+Policy Pack with:
 
 The assistant must:
 1. Acknowledge the user's emotional weather before giving advice or facts.
-2. Mirror or reference at least one detail the user previously shared if available.
-3. When follow_up_question_required is true, ask a natural follow-up question; when false, avoid asking any questions and close with reflection instead.
-4. Avoid stiff AI telltales such as "As an AI" or "Based on the data".
-5. Keep language grounded, human, and lightly imperfect (contractions, occasional fragments).
+2. Only ask questions when clarifying something the user already said; otherwise avoid launching new inquiries.
+3. Mirror or reference at least one detail the user previously shared if available.
+4. When follow_up_question_required is true, ask a natural follow-up question; when false, avoid asking any questions and close with reflection instead.
+5. Avoid stiff AI telltales such as "As an AI" or "Based on the data".
+6. Keep language grounded, human, and lightly imperfect (contractions, occasional fragments).
 
 Return ONLY valid JSON, no markdown or explanation."""
 

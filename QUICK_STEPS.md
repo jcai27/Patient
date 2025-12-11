@@ -24,6 +24,15 @@ $body = @{ transcript_path = "transcript_cleaned.txt"; persona_name = "VirtualHu
 Invoke-RestMethod -Uri "http://localhost:8000/ingest/transcript" -Method POST -ContentType "application/json" -Body $body
 ```
 
+Want to ingest raw audio instead of a pre-made transcript? Upload the file to `/upload/transcript` and the server will run Whisper before generating the artifacts:
+
+```powershell
+$file = Get-Item ".\interview.mp3"
+Invoke-RestMethod -Uri "http://localhost:8000/upload/transcript" `
+  -Method POST `
+  -Form @{ persona_name = "VirtualHuman"; file = $file }
+```
+
 **This takes 2-5 minutes** - it's making multiple LLM API calls to:
 - Chunk the transcript
 - Extract canonical facts (for RAG)

@@ -63,10 +63,10 @@ ANTHROPIC_API_KEY=your_key_here
      ```
 
 4. **(Optional) Prime persona artifacts**
-   - Place transcript `.txt` files in a convenient location.
-   - Run the ingestion helper to generate persona data:
+   - Gather either cleaned transcript `.txt` files or the raw interview audio (`.mp3`, `.wav`, etc.) you want the persona to mimic.
+   - Run the ingestion helper (it now transcribes audio via Whisper before generating persona data):
      ```bash
-     python src/ingest/transcript.py --persona-name "Alice" --transcript path/to/transcript.txt
+     python ingest_transcript.py --persona-name "Alice" --source path/to/interview.mp3
      ```
      or use the HTTP endpoint shown below. Ingestion populates `persona/<name>/` with persona-specific assets (`persona_profile.json`, `style_rules.md`, `persona_history.md`, `canonical_facts.jsonl`, embeddings). Global guardrails live in `persona/global_style_rules.md` and are shared across personas.
 
@@ -82,11 +82,17 @@ ANTHROPIC_API_KEY=your_key_here
    ```
    The FastAPI app boots on `http://localhost:8000/`. Leave this running while you interact with the system.
 
-7. **Ingest a transcript (if you skipped step 4)**
+7. **Ingest a transcript or audio file (if you skipped step 4)**
    ```bash
    curl -X POST http://localhost:8000/ingest/transcript \
      -H "Content-Type: application/json" \
      -d '{"transcript_path": "path/to/transcript.txt", "persona_name": "Alice"}'
+   ```
+   Or upload a raw audio interview and let Whisper transcribe it before ingestion:
+   ```bash
+   curl -X POST http://localhost:8000/upload/transcript \
+     -F "persona_name=Alice" \
+     -F "file=@path/to/interview.mp3"
    ```
    Watch the server logs for ingestion progress; artifacts appear under `persona/Alice/`.
 
@@ -106,12 +112,20 @@ ANTHROPIC_API_KEY=your_key_here
 
 ## Usage
 
-### Ingest a transcript
+### Ingest a transcript (text source)
 ```bash
 curl -X POST http://localhost:8000/ingest/transcript \
   -H "Content-Type: application/json" \
   -d '{"transcript_path": "path/to/transcript.txt", "persona_name": "Alice"}'
 ```
+
+### Upload audio for Whisper transcription
+```bash
+curl -X POST http://localhost:8000/upload/transcript \
+  -F "persona_name=Alice" \
+  -F "file=@path/to/interview.mp3"
+```
+The upload endpoint automatically runs Whisper on the audio and feeds the resulting transcript into the ingestion pipeline.
 
 ### Chat
 ```bash
